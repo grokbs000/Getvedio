@@ -178,6 +178,47 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       playlist_count: null,
     };
   } catch (err: any) {
+    if (detectPlatform(url) === 'tiktok') {
+      try {
+        console.log('🔄 yt-dlp failed for TikTok, falling back to TikWM...');
+        const { default: axios } = await import('axios');
+        const tikwmRes = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+        if (tikwmRes.data?.code === 0 && tikwmRes.data?.data) {
+          const tData = tikwmRes.data.data;
+          return {
+            id: tData.id || '',
+            title: tData.title || 'TikTok Video',
+            description: tData.title || '',
+            thumbnail: tData.cover || tData.origin_cover || '',
+            duration: tData.duration || null,
+            uploader: tData.author?.nickname || 'Unknown',
+            uploader_id: tData.author?.unique_id || '',
+            view_count: tData.play_count || null,
+            like_count: tData.digg_count || null,
+            platform: 'tiktok',
+            webpage_url: url,
+            formats: [{
+              format_id: 'tikwm',
+              ext: 'mp4',
+              resolution: '1080p',
+              filesize: tData.size || null,
+              vcodec: 'h264',
+              acodec: 'aac',
+              format_note: 'Watermark-free',
+              fps: null,
+              tbr: null,
+              has_video: true,
+              has_audio: true,
+            }],
+            is_playlist: false,
+            playlist_count: null,
+          };
+        }
+      } catch (tikwmErr: any) {
+        console.error('TikWM info fallback failed:', tikwmErr.message);
+      }
+    }
+
     if (err.stderr?.includes('playlist') || err.message?.includes('playlist')) {
       try {
         const { stdout } = await execFileAsync(ytdlpPath, [
@@ -277,6 +318,7 @@ app.get('/api/download', async (req, res) => {
     args.push(url);
 
     let filename = 'download';
+    let ytdlpFailed = false;
     try {
       const { stdout: nameOut } = await execFileAsync(ytdlpPath, [
         ...getBaseYtdlpArgs(url),
@@ -284,9 +326,33 @@ app.get('/api/download', async (req, res) => {
         '--no-playlist',
         '-o', '%(title)s.%(ext)s',
         url
-      ], { timeout: 30000 });
+      ], { timeout: 20000 });
       filename = nameOut.trim();
-    } catch {}
+    } catch (err: any) {
+      console.log('yt-dlp get-filename failed:', err.message);
+      ytdlpFailed = true;
+    }
+
+    if (ytdlpFailed && detectPlatform(url) === 'tiktok') {
+      try {
+        console.log('🔄 yt-dlp failed, falling back to TikWM direct redirection...');
+        const { default: axios } = await import('axios');
+        const tikwmRes = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
+        if (tikwmRes.data?.code === 0 && tikwmRes.data?.data) {
+          const tData = tikwmRes.data.data;
+          let redirectUrl = tData.play || tData.wmplay;
+          if (audioOnly) {
+            redirectUrl = tData.music || redirectUrl;
+          }
+          if (redirectUrl) {
+            console.log('✅ Redirecting directly to TikWM CDN URL');
+            return res.redirect(302, redirectUrl);
+          }
+        }
+      } catch (e: any) {
+        console.error('TikWM fallback redirection failed:', e.message);
+      }
+    }
 
     filename = filename.replace(/[/\\?%*:|"<>]/g, '_');
     if (audioOnly && !filename.endsWith('.mp3')) {
