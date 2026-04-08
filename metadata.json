@@ -1,0 +1,5 @@
+{
+  "name": "TikDownloader",
+  "description": "A mobile-friendly TikTok video downloader app that saves videos without watermarks directly to your device.",
+  "requestFramePermissions": ["clipboard-read", "clipboard-write"]
+}
