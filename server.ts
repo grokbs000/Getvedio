@@ -56,10 +56,19 @@ function getBaseYtdlpArgs(url?: string): string[] {
   if (fs.existsSync(cookiesPath)) {
     args.push('--cookies', cookiesPath);
   } else {
-    if (!url || !/(tiktok\.com|douyin\.com)/i.test(url)) {
+    // Fallback to mobile User-Agent which helps bypass some blocks
+    // Exclude TikTok/Douyin (mobile breaking) and Bilibili (WAF strict UA mapping)
+    if (!url || !/(tiktok\.com|douyin\.com|bilibili\.com|b23\.tv)/i.test(url)) {
       args.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1');
     }
   }
+
+  // Bilibili specific fixes: use multiple clients to bypass 412 errors
+  if (url && /(bilibili\.com|b23\.tv)/i.test(url)) {
+    args.push('--extractor-args', 'bilibili:player_client=ios,tv,web');
+    args.push('--add-header', 'Referer: https://www.bilibili.com');
+  }
+
   return args;
 }
 
