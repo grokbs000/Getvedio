@@ -111,6 +111,7 @@ export default function App() {
   const [quality, setQuality] = useState('best');
   const [showQuality, setShowQuality] = useState(false);
   const [downloadType, setDownloadType] = useState<'video' | 'audio'>('video');
+  const [embedSubs, setEmbedSubs] = useState(false);
   const [detectedPlatform, setDetectedPlatform] = useState<string>('');
   const [quickSaveStatus, setQuickSaveStatus] = useState<'idle' | 'reading' | 'fetching' | 'downloading' | 'success' | 'error'>('idle');
   const [quickSaveMsg, setQuickSaveMsg] = useState('');
@@ -206,6 +207,7 @@ export default function App() {
       quality,
       format: 'mp4',
       audioOnly: downloadType === 'audio' ? 'true' : 'false',
+      embedSubs: embedSubs ? 'true' : 'false',
     });
 
     // Open download in new window to not interrupt the page
@@ -283,6 +285,7 @@ export default function App() {
         quality: 'best',
         format: 'mp4',
         audioOnly: 'false',
+        embedSubs: 'true',
       });
 
       const downloadUrl = `/api/download?${params.toString()}`;
@@ -541,22 +544,36 @@ export default function App() {
                     {data.title}
                   </h2>
 
-                  <div className="flex items-center gap-3 text-zinc-500 text-xs">
-                    <span className="font-medium text-zinc-300 truncate max-w-[50%]">
-                      {data.uploader}
-                    </span>
-                    {data.view_count !== null && (
-                      <span className="flex items-center gap-1">
-                        <Eye className="w-3 h-3" />
-                        {formatNumber(data.view_count)}
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center gap-3 text-zinc-500 text-xs">
+                      <span className="font-medium text-zinc-300 truncate max-w-[50%]">
+                        {data.uploader}
                       </span>
-                    )}
-                    {data.like_count !== null && (
-                      <span className="flex items-center gap-1">
-                        <ThumbsUp className="w-3 h-3" />
-                        {formatNumber(data.like_count)}
-                      </span>
-                    )}
+                      {data.view_count !== null && (
+                        <span className="flex items-center gap-1">
+                          <Eye className="w-3 h-3" />
+                          {formatNumber(data.view_count)}
+                        </span>
+                      )}
+                      {data.like_count !== null && (
+                        <span className="flex items-center gap-1">
+                          <ThumbsUp className="w-3 h-3" />
+                          {formatNumber(data.like_count)}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => {
+                        const a = document.createElement('a');
+                        a.href = `/api/proxy-image?url=${encodeURIComponent(data.thumbnail)}`;
+                        a.download = 'cover.jpg';
+                        a.click();
+                      }}
+                      className="group flex items-center justify-center gap-1.5 w-full py-2 bg-zinc-800/50 hover:bg-zinc-800 border border-zinc-700/50 rounded-xl text-xs font-semibold text-zinc-300 transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5 text-zinc-400 group-hover:text-zinc-200" />
+                      下載封面圖片
+                    </button>
                   </div>
                 </div>
               </div>
@@ -592,44 +609,62 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* Quality selector (only for video) */}
+                {/* Quality selector and Subs toggle (only for video) */}
                 {downloadType === 'video' && (
-                  <div ref={qualityRef} className="relative">
+                  <div className="space-y-3">
+                    <div ref={qualityRef} className="relative">
+                      <button
+                        onClick={() => setShowQuality(!showQuality)}
+                        className="w-full py-3.5 px-4 bg-zinc-900/80 border border-zinc-800/50 rounded-2xl text-sm flex items-center justify-between text-zinc-300 hover:border-zinc-700 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Video className="w-4 h-4 text-violet-400" />
+                          <span>
+                            畫質：
+                            <span className="text-zinc-100 font-semibold">
+                              {QUALITY_OPTIONS.find(q => q.value === quality)?.label || '最高畫質'}
+                            </span>
+                          </span>
+                        </div>
+                        <ChevronDown className={cn("w-4 h-4 transition-transform", showQuality && "rotate-180")} />
+                      </button>
+
+                      {showQuality && (
+                        <div className="absolute top-full mt-2 w-full bg-zinc-900 border border-zinc-800/60 rounded-2xl overflow-hidden shadow-2xl z-50 animate-fade-in">
+                          {QUALITY_OPTIONS.map(q => (
+                            <button
+                              key={q.value}
+                              onClick={() => { setQuality(q.value); setShowQuality(false); }}
+                              className={cn(
+                                "w-full px-4 py-3 text-sm flex items-center justify-between transition-colors",
+                                quality === q.value
+                                  ? "bg-violet-600/20 text-violet-300"
+                                  : "text-zinc-300 hover:bg-zinc-800/60"
+                              )}
+                            >
+                              <span className="font-medium">{q.label}</span>
+                              <span className="text-xs text-zinc-500">{q.desc}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                     <button
-                      onClick={() => setShowQuality(!showQuality)}
-                      className="w-full py-3.5 px-4 bg-zinc-900/80 border border-zinc-800/50 rounded-2xl text-sm flex items-center justify-between text-zinc-300 hover:border-zinc-700 transition-colors"
+                      onClick={() => setEmbedSubs(!embedSubs)}
+                      className={cn(
+                        "w-full py-3 px-4 rounded-2xl text-sm flex items-center justify-between transition-colors border",
+                        embedSubs
+                          ? "bg-violet-600/20 border-violet-500/50 text-violet-300"
+                          : "bg-zinc-900/80 border-zinc-800/50 text-zinc-400 hover:border-zinc-700 hover:text-zinc-300"
+                      )}
                     >
                       <div className="flex items-center gap-2">
-                        <Video className="w-4 h-4 text-violet-400" />
-                        <span>
-                          畫質：
-                          <span className="text-zinc-100 font-semibold">
-                            {QUALITY_OPTIONS.find(q => q.value === quality)?.label || '最高畫質'}
-                          </span>
-                        </span>
+                        <CheckCircle2 className={cn("w-4 h-4", embedSubs ? "text-violet-400" : "text-zinc-600")} />
+                        <span className="font-medium">內嵌彈幕與字幕</span>
                       </div>
-                      <ChevronDown className={cn("w-4 h-4 transition-transform", showQuality && "rotate-180")} />
+                      <span className="text-xs opacity-70">支援 B站 / YouTube</span>
                     </button>
-
-                    {showQuality && (
-                      <div className="absolute top-full mt-2 w-full bg-zinc-900 border border-zinc-800/60 rounded-2xl overflow-hidden shadow-2xl z-50 animate-fade-in">
-                        {QUALITY_OPTIONS.map(q => (
-                          <button
-                            key={q.value}
-                            onClick={() => { setQuality(q.value); setShowQuality(false); }}
-                            className={cn(
-                              "w-full px-4 py-3 text-sm flex items-center justify-between transition-colors",
-                              quality === q.value
-                                ? "bg-violet-600/20 text-violet-300"
-                                : "text-zinc-300 hover:bg-zinc-800/60"
-                            )}
-                          >
-                            <span className="font-medium">{q.label}</span>
-                            <span className="text-xs text-zinc-500">{q.desc}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 )}
 

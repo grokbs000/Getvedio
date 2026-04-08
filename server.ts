@@ -232,13 +232,18 @@ app.get('/api/download', async (req, res) => {
     const quality = req.query.quality as string || 'best';
     const format = req.query.format as string || 'mp4';
     const audioOnly = req.query.audioOnly === 'true';
+    const embedSubs = req.query.embedSubs === 'true';
 
     if (!url) {
       return res.status(400).send('URL is required');
     }
 
     const ytdlpPath = await getYtdlpPath();
-    const args: string[] = [...getBaseYtdlpArgs(url), '--no-playlist', '-o', '-'];
+    const args: string[] = [...getBaseYtdlpArgs(url), '--no-playlist', '-o', '-', '-N', '8'];
+
+    if (embedSubs && !audioOnly) {
+      args.push('--write-subs', '--write-auto-subs', '--embed-subs');
+    }
 
     if (audioOnly) {
       args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
@@ -256,7 +261,9 @@ app.get('/api/download', async (req, res) => {
         default: formatStr = 'bestvideo+bestaudio/best';
       }
       args.push('-f', formatStr);
-      if (format === 'mp4') args.push('--merge-output-format', 'mp4');
+      if (format === 'mp4') {
+        args.push('--merge-output-format', embedSubs ? 'mkv' : 'mp4');
+      }
     }
     args.push(url);
 
@@ -275,8 +282,11 @@ app.get('/api/download', async (req, res) => {
     filename = filename.replace(/[/\\?%*:|"<>]/g, '_');
     if (audioOnly && !filename.endsWith('.mp3')) {
       filename = filename.replace(/\.[^.]+$/, '.mp3');
-    } else if (!audioOnly && !filename.endsWith(`.${format}`)) {
-      filename = filename.replace(/\.[^.]+$/, `.${format}`);
+    } else if (!audioOnly) {
+      const targetExt = embedSubs ? '.mkv' : `.${format}`;
+      if (!filename.endsWith(targetExt)) {
+        filename = filename.replace(/\.[^.]+$/, targetExt);
+      }
     }
 
     const contentType = audioOnly ? 'audio/mpeg' : 'video/mp4';
@@ -319,6 +329,7 @@ app.get('/api/download-progress', async (req, res) => {
   const url = req.query.url as string;
   const quality = req.query.quality as string || 'best';
   const audioOnly = req.query.audioOnly === 'true';
+  const embedSubs = req.query.embedSubs === 'true';
 
   if (!url) return res.status(400).json({ error: 'URL is required' });
 
@@ -327,14 +338,18 @@ app.get('/api/download-progress', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
 
   const ytdlpPath = await getYtdlpPath();
-  const args: string[] = [...getBaseYtdlpArgs(url), '--no-playlist', '--newline'];
+  const args: string[] = [...getBaseYtdlpArgs(url), '--no-playlist', '--newline', '-N', '8'];
+
+  if (embedSubs && !audioOnly) {
+    args.push('--write-subs', '--write-auto-subs', '--embed-subs');
+  }
 
   if (audioOnly) {
     args.push('-x', '--audio-format', 'mp3', '--audio-quality', '0');
   } else {
     // ... quality select ...
     let formatStr = 'bestvideo+bestaudio/best';
-    args.push('-f', formatStr, '--merge-output-format', 'mp4');
+    args.push('-f', formatStr, '--merge-output-format', embedSubs ? 'mkv' : 'mp4');
   }
 
   const tmpDir = getTmpDownloadsDir();
