@@ -335,22 +335,31 @@ app.get('/api/download', async (req, res) => {
 
     if (ytdlpFailed && detectPlatform(url) === 'tiktok') {
       try {
-        console.log('🔄 yt-dlp failed, falling back to TikWM direct redirection...');
+        console.log('🔄 yt-dlp failed, falling back to TikWM proxy stream...');
         const { default: axios } = await import('axios');
         const tikwmRes = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(url)}`);
         if (tikwmRes.data?.code === 0 && tikwmRes.data?.data) {
           const tData = tikwmRes.data.data;
-          let redirectUrl = tData.play || tData.wmplay;
+          let targetUrl = tData.play || tData.wmplay;
           if (audioOnly) {
-            redirectUrl = tData.music || redirectUrl;
+            targetUrl = tData.music || targetUrl;
           }
-          if (redirectUrl) {
-            console.log('✅ Redirecting directly to TikWM CDN URL');
-            return res.redirect(302, redirectUrl);
+          if (targetUrl) {
+            console.log('✅ Proxying TikWM CDN URL to Client');
+            let fallbackFilename = (tData.title || `tiktok_${tData.id}`) + (audioOnly ? '.mp3' : '.mp4');
+            fallbackFilename = fallbackFilename.replace(/[/\\?%*:|"<>]/g, '_');
+            
+            const response = await axios.get(targetUrl, { responseType: 'stream' });
+            res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(fallbackFilename)}"; filename*=UTF-8''${encodeURIComponent(fallbackFilename)}`);
+            res.setHeader('Content-Type', audioOnly ? 'audio/mpeg' : 'video/mp4');
+            if (response.headers['content-length']) {
+              res.setHeader('Content-Length', response.headers['content-length']);
+            }
+            return response.data.pipe(res);
           }
         }
       } catch (e: any) {
-        console.error('TikWM fallback redirection failed:', e.message);
+        console.error('TikWM fallback proxy stream failed:', e.message);
       }
     }
 
