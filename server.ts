@@ -100,6 +100,49 @@ function detectPlatform(url: string): string {
   return 'other';
 }
 
+async function sanitizeVideoUrl(inputUrl: string): Promise<string> {
+  if (!inputUrl) return inputUrl;
+  try {
+    let finalUrl = inputUrl;
+    
+    // Resolve b23.tv or v.douyin.com shortlinks if needed
+    if (finalUrl.includes('b23.tv')) {
+      const { default: axios } = await import('axios');
+      try {
+        const res = await axios.get(finalUrl, {
+          maxRedirects: 5,
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+        });
+        if (res.request?.res?.responseUrl) {
+          finalUrl = res.request.res.responseUrl;
+        }
+      } catch (err: any) {
+        if (err.response?.headers?.location) {
+          finalUrl = err.response.headers.location;
+          if (finalUrl.startsWith('/')) finalUrl = 'https://www.bilibili.com' + finalUrl;
+        }
+      }
+    }
+
+    // Clean m.bilibili.com and strip query parameters for stability
+    if (finalUrl.includes('m.bilibili.com/video/')) {
+      finalUrl = finalUrl.replace(/m\.bilibili\.com\/video\//g, 'www.bilibili.com/video/');
+    }
+    
+    // Strip query parameters for Bilibili to avoid WAF blocks and extraction mismatches
+    if (finalUrl.includes('bilibili.com/video/')) {
+      try {
+        const u = new URL(finalUrl);
+        finalUrl = u.origin + u.pathname;
+      } catch {}
+    }
+
+    return finalUrl;
+  } catch {
+    return inputUrl;
+  }
+}
+
 interface VideoFormat {
   format_id: string;
   ext: string;
@@ -263,10 +306,11 @@ app.use(express.json());
 // Fetch video info
 app.post('/api/fetch-info', async (req, res) => {
   try {
-    const { url } = req.body;
+    let { url } = req.body;
     if (!url) {
       return res.status(400).json({ error: 'URL is required' });
     }
+    url = await sanitizeVideoUrl(url);
     const info = await getVideoInfo(url);
     res.json(info);
   } catch (error: any) {
@@ -278,7 +322,7 @@ app.post('/api/fetch-info', async (req, res) => {
 // Download video via yt-dlp streaming
 app.get('/api/download', async (req, res) => {
   try {
-    const url = req.query.url as string;
+    let url = req.query.url as string;
     const quality = req.query.quality as string || 'best';
     const format = req.query.format as string || 'mp4';
     const audioOnly = req.query.audioOnly === 'true';
@@ -287,6 +331,7 @@ app.get('/api/download', async (req, res) => {
     if (!url) {
       return res.status(400).send('URL is required');
     }
+    url = await sanitizeVideoUrl(url);
 
     const ytdlpPath = await getYtdlpPath();
     const args: string[] = [...getBaseYtdlpArgs(url), '--no-playlist', '-o', '-', '-N', '8'];
@@ -410,12 +455,13 @@ function getTmpDownloadsDir() {
 }
 
 app.get('/api/download-progress', async (req, res) => {
-  const url = req.query.url as string;
+  let url = req.query.url as string;
   const quality = req.query.quality as string || 'best';
   const audioOnly = req.query.audioOnly === 'true';
   const embedSubs = req.query.embedSubs === 'true';
 
   if (!url) return res.status(400).json({ error: 'URL is required' });
+  url = await sanitizeVideoUrl(url);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
