@@ -196,6 +196,18 @@ async function fetchXhsViaThirdParty(noteId: string | null, originalUrl: string)
     }
   } catch (e: any) { console.log('xhsdownload API2 failed'); }
 
+  // API 5: Shadiao API (Actually Mojie or similar)
+  try {
+    const r = await axios.get(`https://api.mojie.xyz/api/xiaohongshu?url=${encodeURIComponent(targetUrl)}`, {
+      timeout: 10000,
+      headers
+    });
+    if (r.data?.code === 200 && r.data?.data?.video) {
+      console.log('✅ XHS via Mojie API');
+      return { videoUrl: r.data.data.video, title: r.data.data.title || '小紅書影片', cover: r.data.data.cover || '' };
+    }
+  } catch (e: any) { console.log('Mojie XHS failed'); }
+
   return null;
 }
 
@@ -550,6 +562,58 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       }
       
       throw new Error('小紅書影片解析失敗。請確認連結為公開影片。');
+    }
+
+    if (detectPlatform(url) === 'instagram') {
+      try {
+        console.log('🔄 yt-dlp failed for Instagram, trying third-party fallback...');
+        const { default: axios } = await import('axios');
+        // Try a few known IG scraper APIs
+        const igApis = [
+          `https://api.vience.cn/api/ins?url=${encodeURIComponent(url)}`,
+          `https://api.pearktrue.cn/api/instagram/?url=${encodeURIComponent(url)}`
+        ];
+
+        for (const api of igApis) {
+          try {
+            const res = await axios.get(api, { timeout: 15000 });
+            if (res.data?.code === 200 && (res.data?.data?.video || res.data?.data?.url)) {
+              const d = res.data.data;
+              console.log('✅ Instagram via third-party:', api);
+              return {
+                id: '',
+                title: 'Instagram Video',
+                description: '',
+                thumbnail: d.cover || d.thumbnail || '',
+                duration: null,
+                uploader: 'Instagram User',
+                uploader_id: '',
+                view_count: null,
+                like_count: null,
+                platform: 'instagram',
+                webpage_url: url,
+                formats: [{
+                  format_id: 'ig-thirdparty',
+                  ext: 'mp4',
+                  resolution: 'original',
+                  filesize: null,
+                  vcodec: 'h264',
+                  acodec: 'aac',
+                  format_note: 'Original',
+                  fps: null,
+                  tbr: null,
+                  has_video: true,
+                  has_audio: true,
+                }],
+                is_playlist: false,
+                playlist_count: null,
+              };
+            }
+          } catch {}
+        }
+      } catch (igErr: any) {
+        console.error('Instagram fallback failed:', igErr.message);
+      }
     }
 
     if (err.stderr?.includes('playlist') || err.message?.includes('playlist')) {
