@@ -208,6 +208,7 @@ export default function App() {
       format: 'mp4',
       audioOnly: downloadType === 'audio' ? 'true' : 'false',
       embedSubs: embedSubs ? 'true' : 'false',
+      title: data.title || '',
     });
 
     // Open download in new window to not interrupt the page
@@ -286,6 +287,7 @@ export default function App() {
         format: 'mp4',
         audioOnly: 'false',
         embedSubs: 'true',
+        title: info.title || '',
       });
 
       const downloadUrl = `/api/download?${params.toString()}`;

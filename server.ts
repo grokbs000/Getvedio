@@ -209,7 +209,7 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       title: data.title || 'Untitled',
       description: data.description || '',
       thumbnail: data.thumbnail || '',
-      duration: data.duration || null,
+      duration: data.duration ?? null,
       uploader: data.uploader || data.channel || data.creator || 'Unknown',
       uploader_id: data.uploader_id || data.channel_id || '',
       view_count: data.view_count || null,
@@ -327,6 +327,7 @@ app.get('/api/download', async (req, res) => {
     const format = req.query.format as string || 'mp4';
     const audioOnly = req.query.audioOnly === 'true';
     const embedSubs = req.query.embedSubs === 'true';
+    const titleHint = req.query.title as string || '';
 
     if (!url) {
       return res.status(400).send('URL is required');
@@ -376,6 +377,12 @@ app.get('/api/download', async (req, res) => {
     } catch (err: any) {
       console.log('yt-dlp get-filename failed:', err.message);
       ytdlpFailed = true;
+      // Use title hint from frontend as fallback filename
+      if (titleHint) {
+        const ext = audioOnly ? 'mp3' : (format || 'mp4');
+        filename = `${titleHint}.${ext}`;
+        console.log('Using title hint as filename:', filename);
+      }
     }
 
     if (ytdlpFailed && detectPlatform(url) === 'tiktok') {
