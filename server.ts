@@ -105,12 +105,88 @@ function detectPlatform(url: string): string {
   return 'other';
 }
 
+// Extract XHS note ID from a resolved xiaohongshu.com URL
+function extractXhsNoteId(url: string): string | null {
+  const m = url.match(/\/(?:discovery\/item|explore)\/([a-f0-9]{20,})/i);
+  return m ? m[1] : null;
+}
+
+// Try multiple third-party XHS download APIs to get video info
+async function fetchXhsViaThirdParty(noteId: string, originalUrl: string): Promise<{ videoUrl: string; title: string; cover: string } | null> {
+  const { default: axios } = await import('axios');
+
+  // API 1: ExperAPI (popular XHS third-party)
+  try {
+    const r = await axios.get(`https://www.experapi.com/xhsdown/index.php?url=https://www.xiaohongshu.com/explore/${noteId}`, {
+      timeout: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    });
+    const d = r.data;
+    if (d?.data?.video_url || d?.video || d?.url) {
+      const videoUrl = d?.data?.video_url || d?.video || d?.url;
+      console.log('✅ XHS via ExperAPI:', videoUrl);
+      return { videoUrl, title: d?.data?.title || d?.title || '小紅書影片', cover: d?.data?.cover || d?.cover || '' };
+    }
+  } catch (e: any) { console.log('ExperAPI XHS failed:', e.message); }
+
+  // API 2: XHS downloader API v2
+  try {
+    const r = await axios.post('https://api2.xhsdownload.com/api/xhs', {
+      url: `https://www.xiaohongshu.com/explore/${noteId}`,
+    }, {
+      timeout: 15000,
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    });
+    const d = r.data;
+    if (d?.data?.video) {
+      console.log('✅ XHS via api2.xhsdownload.com');
+      return { videoUrl: d.data.video, title: d.data.title || '小紅書影片', cover: d.data.cover || '' };
+    }
+  } catch (e: any) { console.log('xhsdownload API2 failed:', e.message); }
+
+  // API 3: DownloaderLy API (Pabbly-style)
+  try {
+    const formData = new URLSearchParams();
+    formData.append('url', `https://www.xiaohongshu.com/explore/${noteId}`);
+    const r = await axios.post('https://xvideosdownloader.top/xhs.php', formData, {
+      timeout: 15000,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    });
+    const d = r.data;
+    const videoUrl = d?.data?.video?.url || d?.video_url || d?.download_url;
+    if (videoUrl) {
+      console.log('✅ XHS via xvideosdownloader API');
+      return { videoUrl, title: d?.title || '小紅書影片', cover: d?.thumbnail || '' };
+    }
+  } catch (e: any) { console.log('xvideosdownloader XHS failed:', e.message); }
+
+  // API 4: Try XHS CDN directly using known originVideoKey pattern via sns-video-bd CDN
+  // Construct CDN URL from note ID as last resort
+  try {
+    // Some XHS CDN URLs are predictable: try fetching metadata from a public mirror
+    const r = await axios.get(`https://www.savefrom.net/api/convert?url=https://www.xiaohongshu.com/explore/${noteId}`, {
+      timeout: 10000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    });
+    const links = r.data?.links || r.data?.url;
+    if (Array.isArray(links) && links.length > 0) {
+      const videoLink = links.find((l: any) => l.ext === 'mp4' || l.type === 'video');
+      if (videoLink?.url) {
+        console.log('✅ XHS via SaveFrom');
+        return { videoUrl: videoLink.url, title: r.data?.meta?.title || '小紅書影片', cover: r.data?.meta?.image || '' };
+      }
+    }
+  } catch (e: any) { console.log('SaveFrom XHS failed:', e.message); }
+
+  return null;
+}
+
 async function sanitizeVideoUrl(inputUrl: string): Promise<string> {
   if (!inputUrl) return inputUrl;
   try {
     let finalUrl = inputUrl;
     
-    // Resolve b23.tv or v.douyin.com shortlinks if needed
+    // Resolve b23.tv shortlinks if needed
     if (finalUrl.includes('b23.tv')) {
       const { default: axios } = await import('axios');
       try {
@@ -129,7 +205,9 @@ async function sanitizeVideoUrl(inputUrl: string): Promise<string> {
       }
     }
 
-    // Resolve xhslink.com shortlinks to xiaohongshu.com
+    // Resolve xhslink.com shortlinks
+    // NOTE: xiaohongshu.com itself may block TLS from non-China IPs,
+    // but the redirect chain still works via HTTP 302 headers.
     if (finalUrl.includes('xhslink.com')) {
       const { default: axios } = await import('axios');
       try {
@@ -147,10 +225,13 @@ async function sanitizeVideoUrl(inputUrl: string): Promise<string> {
           console.log('✅ Resolved xhslink.com →', finalUrl);
         }
       } catch (err: any) {
-        // Try to get from redirect headers
+        // Even on error, the redirect location header may have been set
         if (err.response?.headers?.location) {
           finalUrl = err.response.headers.location;
-          console.log('✅ Resolved xhslink.com (redirect) →', finalUrl);
+          console.log('✅ Resolved xhslink.com (redirect header) →', finalUrl);
+        } else if (err.request?.path) {
+          // axios sometimes captures the final redirect path on TLS failure
+          console.error('⚠️ xhslink.com resolved but final TLS to XHS failed (geo-block expected). URL:', finalUrl);
         } else {
           console.error('⚠️ Failed to resolve xhslink.com:', err.message);
         }
@@ -162,7 +243,7 @@ async function sanitizeVideoUrl(inputUrl: string): Promise<string> {
       finalUrl = finalUrl.replace(/m\.bilibili\.com\/video\//g, 'www.bilibili.com/video/');
     }
     
-    // Strip query parameters for Bilibili to avoid WAF blocks and extraction mismatches
+    // Strip query parameters for Bilibili to avoid WAF blocks
     if (finalUrl.includes('bilibili.com/video/')) {
       try {
         const u = new URL(finalUrl);
@@ -295,93 +376,21 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       }
     }
 
-    // Xiaohongshu fallback: scrape page for video data
+    // Xiaohongshu fallback: use third-party APIs (direct scraping won't work from non-China IPs)
     if (detectPlatform(url) === 'xiaohongshu') {
       try {
-        console.log('🔄 yt-dlp failed for Xiaohongshu, falling back to web scraping...');
-        const { default: axios } = await import('axios');
-        const xhsRes = await axios.get(url, {
-          timeout: 20000,
-          maxRedirects: 10,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Referer': 'https://www.xiaohongshu.com',
-          },
-        });
+        console.log('🔄 yt-dlp failed for Xiaohongshu, trying third-party APIs...');
+        const noteId = extractXhsNoteId(url);
+        if (!noteId) throw new Error('Could not extract XHS note ID from URL: ' + url);
+        console.log('🔍 XHS Note ID:', noteId);
 
-        const html = xhsRes.data;
-        // Extract __INITIAL_STATE__ JSON from the page
-        const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?})<\/script>/s)
-          || html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?})\s*;?\s*<\/script>/s);
-
-        if (stateMatch) {
-          // XHS uses undefined as placeholder, replace with null for valid JSON
-          const jsonStr = stateMatch[1].replace(/undefined/g, 'null');
-          const state = JSON.parse(jsonStr);
-          const noteData = state?.note?.noteDetailMap;
-          const firstNote = noteData ? Object.values(noteData)[0] as any : null;
-          const note = firstNote?.note;
-
-          if (note) {
-            const videoInfo = note.video;
-            let videoUrl = '';
-            if (videoInfo?.consumer?.originVideoKey) {
-              videoUrl = `https://sns-video-bd.xhscdn.com/${videoInfo.consumer.originVideoKey}`;
-            } else if (videoInfo?.media?.stream?.h264?.[0]?.masterUrl) {
-              videoUrl = videoInfo.media.stream.h264[0].masterUrl;
-            }
-
-            const coverUrl = note.imageList?.[0]?.urlDefault
-              || note.imageList?.[0]?.url
-              || note.imageList?.[0]?.infoList?.[0]?.url
-              || '';
-
-            return {
-              id: note.noteId || note.id || '',
-              title: note.title || note.desc || '小紅書影片',
-              description: note.desc || '',
-              thumbnail: coverUrl,
-              duration: videoInfo?.capa?.duration ? Math.round(videoInfo.capa.duration / 1000) : null,
-              uploader: note.user?.nickname || note.user?.nickName || 'Unknown',
-              uploader_id: note.user?.userId || '',
-              view_count: note.interactInfo?.viewCount || null,
-              like_count: note.interactInfo?.likedCount || null,
-              platform: 'xiaohongshu',
-              webpage_url: url,
-              formats: videoUrl ? [{
-                format_id: 'xhs-origin',
-                ext: 'mp4',
-                resolution: 'original',
-                filesize: null,
-                vcodec: 'h264',
-                acodec: 'aac',
-                format_note: 'Original',
-                fps: null,
-                tbr: null,
-                has_video: true,
-                has_audio: true,
-              }] : [],
-              is_playlist: false,
-              playlist_count: null,
-            };
-          }
-        }
-
-        // Fallback: try og:video meta tag
-        const ogVideoMatch = html.match(/<meta[^>]*property="og:video"[^>]*content="([^"]+)"/)
-          || html.match(/<meta[^>]*property="og:video:url"[^>]*content="([^"]+)"/);
-        const ogTitleMatch = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/);
-        const ogImageMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/);
-        const ogDescMatch = html.match(/<meta[^>]*property="og:description"[^>]*content="([^"]+)"/);
-
-        if (ogVideoMatch || ogTitleMatch) {
+        const xhsData = await fetchXhsViaThirdParty(noteId, url);
+        if (xhsData) {
           return {
-            id: '',
-            title: ogTitleMatch?.[1] || '小紅書影片',
-            description: ogDescMatch?.[1] || '',
-            thumbnail: ogImageMatch?.[1] || '',
+            id: noteId,
+            title: xhsData.title,
+            description: '',
+            thumbnail: xhsData.cover,
             duration: null,
             uploader: 'Unknown',
             uploader_id: '',
@@ -389,14 +398,14 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
             like_count: null,
             platform: 'xiaohongshu',
             webpage_url: url,
-            formats: ogVideoMatch ? [{
-              format_id: 'xhs-og',
+            formats: xhsData.videoUrl ? [{
+              format_id: 'xhs-thirdparty',
               ext: 'mp4',
               resolution: 'original',
               filesize: null,
               vcodec: 'h264',
               acodec: 'aac',
-              format_note: 'OG Video',
+              format_note: 'Original',
               fps: null,
               tbr: null,
               has_video: true,
@@ -407,7 +416,7 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
           };
         }
       } catch (xhsErr: any) {
-        console.error('Xiaohongshu fallback scraping failed:', xhsErr.message);
+        console.error('Xiaohongshu third-party fallback failed:', xhsErr.message);
       }
     }
 
@@ -564,59 +573,21 @@ app.get('/api/download', async (req, res) => {
       }
     }
 
-    // Xiaohongshu download fallback: scrape page and proxy stream
+    // Xiaohongshu download fallback: use third-party APIs and proxy the stream
     if (ytdlpFailed && detectPlatform(url) === 'xiaohongshu') {
       try {
-        console.log('🔄 yt-dlp failed, falling back to Xiaohongshu web scraping for download...');
-        const { default: axios } = await import('axios');
-        const xhsRes = await axios.get(url, {
-          timeout: 20000,
-          maxRedirects: 10,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Referer': 'https://www.xiaohongshu.com',
-          },
-        });
+        console.log('🔄 yt-dlp failed, trying third-party XHS APIs for download...');
+        const noteId = extractXhsNoteId(url);
+        if (!noteId) throw new Error('Could not extract XHS note ID');
 
-        const html = xhsRes.data;
-        const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?})<\/script>/s)
-          || html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?})\s*;?\s*<\/script>/s);
-
-        let videoUrl = '';
-        let xhsTitle = '';
-
-        if (stateMatch) {
-          const jsonStr = stateMatch[1].replace(/undefined/g, 'null');
-          const state = JSON.parse(jsonStr);
-          const noteData = state?.note?.noteDetailMap;
-          const firstNote = noteData ? Object.values(noteData)[0] as any : null;
-          const note = firstNote?.note;
-          if (note) {
-            xhsTitle = note.title || note.desc || '小紅書影片';
-            const videoInfo = note.video;
-            if (videoInfo?.consumer?.originVideoKey) {
-              videoUrl = `https://sns-video-bd.xhscdn.com/${videoInfo.consumer.originVideoKey}`;
-            } else if (videoInfo?.media?.stream?.h264?.[0]?.masterUrl) {
-              videoUrl = videoInfo.media.stream.h264[0].masterUrl;
-            }
-          }
-        }
-
-        if (!videoUrl) {
-          const ogVideoMatch = html.match(/<meta[^>]*property="og:video(?::url)?"[^>]*content="([^"]+)"/);
-          const ogTitleMatch = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/);
-          if (ogVideoMatch) videoUrl = ogVideoMatch[1];
-          if (ogTitleMatch) xhsTitle = xhsTitle || ogTitleMatch[1];
-        }
-
-        if (videoUrl) {
-          console.log('✅ Proxying Xiaohongshu video to client');
-          let xhsFilename = (xhsTitle || titleHint || 'xiaohongshu_video') + '.mp4';
+        const xhsData = await fetchXhsViaThirdParty(noteId, url);
+        if (xhsData?.videoUrl) {
+          console.log('✅ Proxying XHS video via third-party CDN URL');
+          const { default: axios } = await import('axios');
+          let xhsFilename = (xhsData.title || titleHint || 'xiaohongshu_video') + '.mp4';
           xhsFilename = xhsFilename.replace(/[/\\?%*:"|<>]/g, '_');
 
-          const response = await axios.get(videoUrl, {
+          const response = await axios.get(xhsData.videoUrl, {
             responseType: 'stream',
             timeout: 60000,
             headers: {
@@ -632,7 +603,7 @@ app.get('/api/download', async (req, res) => {
           return response.data.pipe(res);
         }
       } catch (e: any) {
-        console.error('Xiaohongshu fallback download failed:', e.message);
+        console.error('Xiaohongshu third-party download failed:', e.message);
       }
     }
 
