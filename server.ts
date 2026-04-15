@@ -119,94 +119,49 @@ async function fetchXhsViaThirdParty(noteId: string | null, originalUrl: string)
 
   const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
 
-  // API 0: anythink.cc (Very reliable for XHS)
-  try {
-    const r = await axios.get(`https://v.anythink.cc/api/video/xiaohongshu?url=${encodeURIComponent(targetUrl)}`, {
-      timeout: 15000,
-      headers
-    });
-    if (r.data?.code === 200 && r.data?.data?.video) {
-      console.log('✅ XHS via anythink.cc');
-      return { 
-        videoUrl: r.data.data.video, 
-        title: r.data.data.title || '小紅書影片', 
-        cover: r.data.data.cover || '' 
-      };
+  // Helper for fast API calls
+  async function tryApi(name: string, config: any) {
+    try {
+      const res = await axios({ ...config, timeout: 5000, headers: { ...headers, ...config.headers } });
+      return res;
+    } catch (e) {
+      console.log(`${name} failed`);
+      return null;
     }
-  } catch (e: any) { console.log('anythink.cc XHS failed'); }
+  }
 
-  // API 1: TenAPI (v2)
-  try {
-    const r = await axios.get(`https://tenapi.cn/v2/xiaohongshu?url=${encodeURIComponent(targetUrl)}`, {
-      timeout: 10000,
-      headers
-    });
-    if (r.data?.code === 200 && r.data?.data?.url) {
-      console.log('✅ XHS via TenAPI');
-      return { 
-        videoUrl: r.data.data.url, 
-        title: r.data.data.title || '小紅書影片', 
-        cover: r.data.data.cover || '' 
-      };
-    }
-  } catch (e: any) { console.log('TenAPI XHS failed'); }
+  // API 0: anythink.cc
+  let r = await tryApi('anythink.cc', { url: `https://v.anythink.cc/api/video/xiaohongshu?url=${encodeURIComponent(targetUrl)}` });
+  if (r?.data?.code === 200 && r?.data?.data?.video) {
+    return { videoUrl: r.data.data.video, title: r.data.data.title || '小紅書影片', cover: r.data.data.cover || '' };
+  }
+
+  // API 1: TenAPI
+  r = await tryApi('TenAPI', { url: `https://tenapi.cn/v2/xiaohongshu?url=${encodeURIComponent(targetUrl)}` });
+  if (r?.data?.code === 200 && r?.data?.data?.url) {
+    return { videoUrl: r.data.data.url, title: r.data.data.title || '小紅書影片', cover: r.data.data.cover || '' };
+  }
 
   // API 2: ExperAPI
-  try {
-    const r = await axios.get(`https://www.experapi.com/xhsdown/index.php?url=${encodeURIComponent(targetUrl)}`, {
-      timeout: 15000,
-      headers
-    });
-    const d = r.data;
-    if (d?.data?.video_url || d?.video || d?.url) {
-      const videoUrl = d?.data?.video_url || d?.video || d?.url;
-      console.log('✅ XHS via ExperAPI');
-      return { videoUrl, title: d?.data?.title || d?.title || '小紅書影片', cover: d?.data?.cover || d?.cover || '' };
-    }
-  } catch (e: any) { console.log('ExperAPI XHS failed'); }
+  r = await tryApi('ExperAPI', { url: `https://www.experapi.com/xhsdown/index.php?url=${encodeURIComponent(targetUrl)}` });
+  if (r?.data?.data?.video_url || r?.data?.video || r?.data?.url) {
+    const videoUrl = r.data?.data?.video_url || r.data?.video || r.data?.url;
+    return { videoUrl, title: r.data?.data?.title || r.data?.title || '小紅書影片', cover: r.data?.data?.cover || r.data?.cover || '' };
+  }
 
   // API 3: Pearktrue
-  try {
-    const r = await axios.get(`https://api.pearktrue.cn/api/xiaohongshu/?url=${encodeURIComponent(targetUrl)}`, {
-      timeout: 10000,
-      headers
-    });
-    if (r.data?.code === 200 && r.data?.data?.video) {
-        console.log('✅ XHS via Pearktrue');
-        return { 
-            videoUrl: r.data.data.video, 
-            title: r.data.data.title || '小紅書影片', 
-            cover: r.data.data.img || '' 
-        };
-    }
-  } catch (e: any) { console.log('Pearktrue XHS failed'); }
+  r = await tryApi('Pearktrue', { url: `https://api.pearktrue.cn/api/xiaohongshu/?url=${encodeURIComponent(targetUrl)}` });
+  if (r?.data?.code === 200 && r?.data?.data?.video) {
+    return { videoUrl: r.data.data.video, title: r.data.data.title || '小紅書影片', cover: r.data.data.img || '' };
+  }
 
-  // API 4: api2.xhsdownload.com
+  // API 4: xhsdownload (Post)
   try {
-    const r = await axios.post('https://api2.xhsdownload.com/api/xhs', {
-      url: targetUrl,
-    }, {
-      timeout: 15000,
-      headers: { ...headers, 'Content-Type': 'application/json' },
-    });
-    const d = r.data;
-    if (d?.data?.video) {
-      console.log('✅ XHS via api2.xhsdownload.com');
-      return { videoUrl: d.data.video, title: d.data.title || '小紅書影片', cover: d.data.cover || '' };
+    const res = await axios.post('https://api2.xhsdownload.com/api/xhs', { url: targetUrl }, { timeout: 5000, headers: { ...headers, 'Content-Type': 'application/json' } });
+    if (res.data?.data?.video) {
+      return { videoUrl: res.data.data.video, title: res.data.data.title || '小紅書影片', cover: res.data.data.cover || '' };
     }
-  } catch (e: any) { console.log('xhsdownload API2 failed'); }
-
-  // API 5: Shadiao API (Actually Mojie or similar)
-  try {
-    const r = await axios.get(`https://api.mojie.xyz/api/xiaohongshu?url=${encodeURIComponent(targetUrl)}`, {
-      timeout: 10000,
-      headers
-    });
-    if (r.data?.code === 200 && r.data?.data?.video) {
-      console.log('✅ XHS via Mojie API');
-      return { videoUrl: r.data.data.video, title: r.data.data.title || '小紅書影片', cover: r.data.data.cover || '' };
-    }
-  } catch (e: any) { console.log('Mojie XHS failed'); }
+  } catch {}
 
   return null;
 }
@@ -245,7 +200,7 @@ async function sanitizeVideoUrl(inputUrl: string): Promise<string> {
           if (currentUrl.includes('xiaohongshu.com')) break;
           const res = await axios.get(currentUrl, {
             maxRedirects: 0,
-            timeout: 10000,
+            timeout: 3000,
             validateStatus: (status) => status >= 200 && status < 400,
             headers: {
               'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
@@ -326,9 +281,9 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       ...getBaseYtdlpArgs(url),
       '--dump-json',
       '--no-playlist',
-      '--socket-timeout', '30',
+      '--socket-timeout', '10',
       url
-    ], { maxBuffer: 10 * 1024 * 1024, timeout: 60000 });
+    ], { maxBuffer: 10 * 1024 * 1024, timeout: 20000 });
 
     const data = JSON.parse(stdout);
     const platform = detectPlatform(url);
@@ -416,8 +371,8 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       try {
         const { default: axios } = await import('axios');
         const xhsRes = await axios.get(url, {
-          timeout: 20000,
-          maxRedirects: 10,
+          timeout: 8000,
+          maxRedirects: 5,
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
