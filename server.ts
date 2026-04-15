@@ -559,8 +559,10 @@ if (!process.env.VERCEL) {
     }
 
     app.listen(PORT, '0.0.0.0', async () => {
-      console.log(`🚀 GetVideo Server running on http://localhost:${PORT}`);
-      await ensureLatestYtdlp();
+      console.log(`🚀 GetVideo Server running on port ${PORT}`);
+      if (!process.env.RENDER) {
+        await ensureLatestYtdlp();
+      }
     });
   })();
 }

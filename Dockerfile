@@ -20,15 +20,15 @@ RUN npm install
 # 複製專案原始碼
 COPY . .
 
-# 打包前端靜態網頁 (產出 dist 資料夾)
+# 打包前端靜態網頁與後端伺服器
 RUN npm run build
 
 # 設定環境變數
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV PORT=10000
 
 # 開放對外的 Port
-EXPOSE 3000
+EXPOSE 10000
 
 # 啟動伺服器
 CMD ["npm", "start"]

@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx --watch server.ts",
-    "start": "NODE_ENV=production tsx server.ts",
-    "build": "vite build",
+    "start": "NODE_ENV=production node dist-server/server.js",
+    "build": "npm run build:web && npm run build:server",
+    "build:web": "vite build",
+    "build:server": "tsc server.ts --outDir dist-server --module esnext --target esnext --moduleResolution node --allowSyntheticDefaultImports --esModuleInterop --skipLibCheck",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
