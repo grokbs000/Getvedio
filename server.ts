@@ -205,35 +205,36 @@ async function sanitizeVideoUrl(inputUrl: string): Promise<string> {
     }
 
     // Resolve xhslink.com shortlinks
-    // NOTE: xiaohongshu.com itself may block TLS from non-China IPs,
-    // but the redirect chain still works via HTTP 302 headers.
+    // Manually follow redirects to avoid TLS block on final xiaohongshu.com domain
     if (finalUrl.includes('xhslink.com')) {
       const { default: axios } = await import('axios');
       try {
-        const res = await axios.get(finalUrl, {
-          maxRedirects: 10,
-          timeout: 15000,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          },
-        });
-        const resolvedUrl = res.request?.res?.responseUrl || res.request?.responseURL;
-        if (resolvedUrl && resolvedUrl.includes('xiaohongshu.com')) {
-          finalUrl = resolvedUrl;
-          console.log('✅ Resolved xhslink.com →', finalUrl);
+        let currentUrl = finalUrl;
+        for (let i = 0; i < 5; i++) {
+          if (currentUrl.includes('xiaohongshu.com')) break;
+          const res = await axios.get(currentUrl, {
+            maxRedirects: 0,
+            timeout: 10000,
+            validateStatus: (status) => status >= 200 && status < 400,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+          });
+          
+          if (res.status >= 300 && res.status < 400 && res.headers.location) {
+            currentUrl = res.headers.location;
+          } else {
+            break;
+          }
+        }
+        
+        if (currentUrl.includes('xiaohongshu.com')) {
+           finalUrl = currentUrl;
+           console.log('✅ Resolved xhslink.com manually →', finalUrl);
         }
       } catch (err: any) {
-        // Even on error, the redirect location header may have been set
-        if (err.response?.headers?.location) {
-          finalUrl = err.response.headers.location;
-          console.log('✅ Resolved xhslink.com (redirect header) →', finalUrl);
-        } else if (err.request?.path) {
-          // axios sometimes captures the final redirect path on TLS failure
-          console.error('⚠️ xhslink.com resolved but final TLS to XHS failed (geo-block expected). URL:', finalUrl);
-        } else {
-          console.error('⚠️ Failed to resolve xhslink.com:', err.message);
-        }
+        console.error('⚠️ Failed to resolve xhslink.com:', err.message);
       }
     }
 
@@ -528,6 +529,8 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       } catch (apiErr: any) {
         console.error('XHS third-party API fallback failed:', apiErr.message);
       }
+      
+      throw new Error('小紅書影片解析失敗。請確認連結為公開影片。');
     }
 
     if (err.stderr?.includes('playlist') || err.message?.includes('playlist')) {
