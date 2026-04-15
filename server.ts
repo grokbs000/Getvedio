@@ -586,6 +586,13 @@ app.post('/api/fetch-info', async (req, res) => {
     res.json(info);
   } catch (error: any) {
     console.error('Error fetching video info:', error.message || error);
+    
+    // Check if it's a known expected error, return 400 instead of 500
+    const errStr = error.stderr || error.message || '';
+    if (errStr.includes('小紅書影片解析失敗') || errStr.includes('Unsupported URL') || errStr.includes('Video unavailable')) {
+        return res.status(400).json({ error: error.message || '不支援的影片連結，或影片已設為私密。' });
+    }
+
     res.status(500).json({ error: error.stderr ? error.stderr.split('\n').filter((l: string) => l.includes('ERROR')).join('; ') || 'Failed to fetch video info' : error.message || 'Failed to fetch video info' });
   }
 });
