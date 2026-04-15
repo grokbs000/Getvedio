@@ -107,17 +107,34 @@ function detectPlatform(url: string): string {
 
 // Extract XHS note ID from a resolved xiaohongshu.com URL
 function extractXhsNoteId(url: string): string | null {
-  const m = url.match(/\/(?:discovery\/item|explore)\/([a-f0-9]{20,})/i);
+  const m = url.match(/\/(?:discovery\/item|explore|item)\/([a-zA-Z0-9]+)/i);
   return m ? m[1] : null;
 }
 
 // Try multiple third-party XHS download APIs to get video info
-async function fetchXhsViaThirdParty(noteId: string, originalUrl: string): Promise<{ videoUrl: string; title: string; cover: string } | null> {
+async function fetchXhsViaThirdParty(noteId: string | null, originalUrl: string): Promise<{ videoUrl: string; title: string; cover: string } | null> {
   const { default: axios } = await import('axios');
+  const targetUrl = noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : originalUrl;
+
+  // API 0: anythink.cc (Very reliable for XHS)
+  try {
+    const r = await axios.get(`https://v.anythink.cc/api/video/xiaohongshu?url=${encodeURIComponent(targetUrl)}`, {
+      timeout: 15000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    });
+    if (r.data?.code === 200 && r.data?.data?.video) {
+      console.log('✅ XHS via anythink.cc:', r.data.data.video);
+      return { 
+        videoUrl: r.data.data.video, 
+        title: r.data.data.title || '小紅書影片', 
+        cover: r.data.data.cover || '' 
+      };
+    }
+  } catch (e: any) { console.log('anythink.cc XHS failed:', e.message); }
 
   // API 1: ExperAPI (popular XHS third-party)
   try {
-    const r = await axios.get(`https://www.experapi.com/xhsdown/index.php?url=https://www.xiaohongshu.com/explore/${noteId}`, {
+    const r = await axios.get(`https://www.experapi.com/xhsdown/index.php?url=${encodeURIComponent(targetUrl)}`, {
       timeout: 15000,
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
     });
@@ -132,7 +149,7 @@ async function fetchXhsViaThirdParty(noteId: string, originalUrl: string): Promi
   // API 2: XHS downloader API v2
   try {
     const r = await axios.post('https://api2.xhsdownload.com/api/xhs', {
-      url: `https://www.xiaohongshu.com/explore/${noteId}`,
+      url: targetUrl,
     }, {
       timeout: 15000,
       headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
@@ -144,10 +161,10 @@ async function fetchXhsViaThirdParty(noteId: string, originalUrl: string): Promi
     }
   } catch (e: any) { console.log('xhsdownload API2 failed:', e.message); }
 
-  // API 3: DownloaderLy API (Pabbly-style)
+  // API 3: DownloaderLy API
   try {
     const formData = new URLSearchParams();
-    formData.append('url', `https://www.xiaohongshu.com/explore/${noteId}`);
+    formData.append('url', targetUrl);
     const r = await axios.post('https://xvideosdownloader.top/xhs.php', formData, {
       timeout: 15000,
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
@@ -159,24 +176,6 @@ async function fetchXhsViaThirdParty(noteId: string, originalUrl: string): Promi
       return { videoUrl, title: d?.title || '小紅書影片', cover: d?.thumbnail || '' };
     }
   } catch (e: any) { console.log('xvideosdownloader XHS failed:', e.message); }
-
-  // API 4: Try XHS CDN directly using known originVideoKey pattern via sns-video-bd CDN
-  // Construct CDN URL from note ID as last resort
-  try {
-    // Some XHS CDN URLs are predictable: try fetching metadata from a public mirror
-    const r = await axios.get(`https://www.savefrom.net/api/convert?url=https://www.xiaohongshu.com/explore/${noteId}`, {
-      timeout: 10000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    });
-    const links = r.data?.links || r.data?.url;
-    if (Array.isArray(links) && links.length > 0) {
-      const videoLink = links.find((l: any) => l.ext === 'mp4' || l.type === 'video');
-      if (videoLink?.url) {
-        console.log('✅ XHS via SaveFrom');
-        return { videoUrl: videoLink.url, title: r.data?.meta?.title || '小紅書影片', cover: r.data?.meta?.image || '' };
-      }
-    }
-  } catch (e: any) { console.log('SaveFrom XHS failed:', e.message); }
 
   return null;
 }
@@ -381,8 +380,7 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       try {
         console.log('🔄 yt-dlp failed for Xiaohongshu, trying third-party APIs...');
         const noteId = extractXhsNoteId(url);
-        if (!noteId) throw new Error('Could not extract XHS note ID from URL: ' + url);
-        console.log('🔍 XHS Note ID:', noteId);
+        console.log('🔍 XHS Note ID detection result:', noteId || 'Not found (using full URL)');
 
         const xhsData = await fetchXhsViaThirdParty(noteId, url);
         if (xhsData) {
@@ -578,7 +576,6 @@ app.get('/api/download', async (req, res) => {
       try {
         console.log('🔄 yt-dlp failed, trying third-party XHS APIs for download...');
         const noteId = extractXhsNoteId(url);
-        if (!noteId) throw new Error('Could not extract XHS note ID');
 
         const xhsData = await fetchXhsViaThirdParty(noteId, url);
         if (xhsData?.videoUrl) {
