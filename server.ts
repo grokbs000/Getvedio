@@ -114,68 +114,87 @@ function extractXhsNoteId(url: string): string | null {
 // Try multiple third-party XHS download APIs to get video info
 async function fetchXhsViaThirdParty(noteId: string | null, originalUrl: string): Promise<{ videoUrl: string; title: string; cover: string } | null> {
   const { default: axios } = await import('axios');
-  const targetUrl = noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : originalUrl;
+  // Use the full URL if it contains xsec_token, otherwise use the noteId link
+  const targetUrl = originalUrl.includes('xsec') ? originalUrl : (noteId ? `https://www.xiaohongshu.com/explore/${noteId}` : originalUrl);
+
+  const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' };
 
   // API 0: anythink.cc (Very reliable for XHS)
   try {
     const r = await axios.get(`https://v.anythink.cc/api/video/xiaohongshu?url=${encodeURIComponent(targetUrl)}`, {
       timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      headers
     });
     if (r.data?.code === 200 && r.data?.data?.video) {
-      console.log('✅ XHS via anythink.cc:', r.data.data.video);
+      console.log('✅ XHS via anythink.cc');
       return { 
         videoUrl: r.data.data.video, 
         title: r.data.data.title || '小紅書影片', 
         cover: r.data.data.cover || '' 
       };
     }
-  } catch (e: any) { console.log('anythink.cc XHS failed:', e.message); }
+  } catch (e: any) { console.log('anythink.cc XHS failed'); }
 
-  // API 1: ExperAPI (popular XHS third-party)
+  // API 1: TenAPI (v2)
+  try {
+    const r = await axios.get(`https://tenapi.cn/v2/xiaohongshu?url=${encodeURIComponent(targetUrl)}`, {
+      timeout: 10000,
+      headers
+    });
+    if (r.data?.code === 200 && r.data?.data?.url) {
+      console.log('✅ XHS via TenAPI');
+      return { 
+        videoUrl: r.data.data.url, 
+        title: r.data.data.title || '小紅書影片', 
+        cover: r.data.data.cover || '' 
+      };
+    }
+  } catch (e: any) { console.log('TenAPI XHS failed'); }
+
+  // API 2: ExperAPI
   try {
     const r = await axios.get(`https://www.experapi.com/xhsdown/index.php?url=${encodeURIComponent(targetUrl)}`, {
       timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      headers
     });
     const d = r.data;
     if (d?.data?.video_url || d?.video || d?.url) {
       const videoUrl = d?.data?.video_url || d?.video || d?.url;
-      console.log('✅ XHS via ExperAPI:', videoUrl);
+      console.log('✅ XHS via ExperAPI');
       return { videoUrl, title: d?.data?.title || d?.title || '小紅書影片', cover: d?.data?.cover || d?.cover || '' };
     }
-  } catch (e: any) { console.log('ExperAPI XHS failed:', e.message); }
+  } catch (e: any) { console.log('ExperAPI XHS failed'); }
 
-  // API 2: XHS downloader API v2
+  // API 3: Pearktrue
+  try {
+    const r = await axios.get(`https://api.pearktrue.cn/api/xiaohongshu/?url=${encodeURIComponent(targetUrl)}`, {
+      timeout: 10000,
+      headers
+    });
+    if (r.data?.code === 200 && r.data?.data?.video) {
+        console.log('✅ XHS via Pearktrue');
+        return { 
+            videoUrl: r.data.data.video, 
+            title: r.data.data.title || '小紅書影片', 
+            cover: r.data.data.img || '' 
+        };
+    }
+  } catch (e: any) { console.log('Pearktrue XHS failed'); }
+
+  // API 4: api2.xhsdownload.com
   try {
     const r = await axios.post('https://api2.xhsdownload.com/api/xhs', {
       url: targetUrl,
     }, {
       timeout: 15000,
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      headers: { ...headers, 'Content-Type': 'application/json' },
     });
     const d = r.data;
     if (d?.data?.video) {
       console.log('✅ XHS via api2.xhsdownload.com');
       return { videoUrl: d.data.video, title: d.data.title || '小紅書影片', cover: d.data.cover || '' };
     }
-  } catch (e: any) { console.log('xhsdownload API2 failed:', e.message); }
-
-  // API 3: DownloaderLy API
-  try {
-    const formData = new URLSearchParams();
-    formData.append('url', targetUrl);
-    const r = await axios.post('https://xvideosdownloader.top/xhs.php', formData, {
-      timeout: 15000,
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    });
-    const d = r.data;
-    const videoUrl = d?.data?.video?.url || d?.video_url || d?.download_url;
-    if (videoUrl) {
-      console.log('✅ XHS via xvideosdownloader API');
-      return { videoUrl, title: d?.title || '小紅書影片', cover: d?.thumbnail || '' };
-    }
-  } catch (e: any) { console.log('xvideosdownloader XHS failed:', e.message); }
+  } catch (e: any) { console.log('xhsdownload API2 failed'); }
 
   return null;
 }
