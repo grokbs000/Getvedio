@@ -375,17 +375,129 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
       }
     }
 
-    // Xiaohongshu fallback: use third-party APIs (direct scraping won't work from non-China IPs)
+    // Xiaohongshu fallback: direct page scraping + third-party APIs
     if (detectPlatform(url) === 'xiaohongshu') {
-      try {
-        console.log('🔄 yt-dlp failed for Xiaohongshu, trying third-party APIs...');
-        const noteId = extractXhsNoteId(url);
-        console.log('🔍 XHS Note ID detection result:', noteId || 'Not found (using full URL)');
+      const noteId = extractXhsNoteId(url);
+      console.log('🔄 yt-dlp failed for XHS, trying direct scraping... Note ID:', noteId || 'unknown');
 
+      // Step 1: Direct page scraping (works from servers that can reach xiaohongshu.com)
+      try {
+        const { default: axios } = await import('axios');
+        const xhsRes = await axios.get(url, {
+          timeout: 20000,
+          maxRedirects: 10,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://www.xiaohongshu.com',
+          },
+        });
+
+        const html = xhsRes.data;
+        const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?})<\/script>/s)
+          || html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?})\s*;?\s*<\/script>/s);
+
+        if (stateMatch) {
+          const jsonStr = stateMatch[1].replace(/undefined/g, 'null');
+          const state = JSON.parse(jsonStr);
+          const noteData = state?.note?.noteDetailMap;
+          const firstNote = noteData ? Object.values(noteData)[0] as any : null;
+          const note = firstNote?.note;
+
+          if (note) {
+            const videoInfo = note.video;
+            let videoUrl = '';
+            if (videoInfo?.consumer?.originVideoKey) {
+              videoUrl = `https://sns-video-bd.xhscdn.com/${videoInfo.consumer.originVideoKey}`;
+            } else if (videoInfo?.media?.stream?.h264?.[0]?.masterUrl) {
+              videoUrl = videoInfo.media.stream.h264[0].masterUrl;
+            }
+
+            const coverUrl = note.imageList?.[0]?.urlDefault
+              || note.imageList?.[0]?.url
+              || note.imageList?.[0]?.infoList?.[0]?.url
+              || '';
+
+            console.log('✅ XHS direct scraping success, video URL found:', !!videoUrl);
+            return {
+              id: note.noteId || note.id || noteId || '',
+              title: note.title || note.desc || '小紅書影片',
+              description: note.desc || '',
+              thumbnail: coverUrl,
+              duration: videoInfo?.capa?.duration ? Math.round(videoInfo.capa.duration / 1000) : null,
+              uploader: note.user?.nickname || note.user?.nickName || 'Unknown',
+              uploader_id: note.user?.userId || '',
+              view_count: note.interactInfo?.viewCount || null,
+              like_count: note.interactInfo?.likedCount || null,
+              platform: 'xiaohongshu',
+              webpage_url: url,
+              formats: videoUrl ? [{
+                format_id: 'xhs-origin',
+                ext: 'mp4',
+                resolution: 'original',
+                filesize: null,
+                vcodec: 'h264',
+                acodec: 'aac',
+                format_note: 'Original',
+                fps: null,
+                tbr: null,
+                has_video: true,
+                has_audio: true,
+              }] : [],
+              is_playlist: false,
+              playlist_count: null,
+            };
+          }
+        }
+
+        // Fallback: try og:video meta tag from the page
+        const ogVideoMatch = html.match(/<meta[^>]*property="og:video"[^>]*content="([^"]+)"/)
+          || html.match(/<meta[^>]*property="og:video:url"[^>]*content="([^"]+)"/);
+        const ogTitleMatch = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/);
+        const ogImageMatch = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]+)"/);
+
+        if (ogVideoMatch || ogTitleMatch) {
+          console.log('✅ XHS og:video fallback, video found:', !!ogVideoMatch);
+          return {
+            id: noteId || '',
+            title: ogTitleMatch?.[1] || '小紅書影片',
+            description: '',
+            thumbnail: ogImageMatch?.[1] || '',
+            duration: null,
+            uploader: 'Unknown',
+            uploader_id: '',
+            view_count: null,
+            like_count: null,
+            platform: 'xiaohongshu',
+            webpage_url: url,
+            formats: ogVideoMatch ? [{
+              format_id: 'xhs-og',
+              ext: 'mp4',
+              resolution: 'original',
+              filesize: null,
+              vcodec: 'h264',
+              acodec: 'aac',
+              format_note: 'OG Video',
+              fps: null,
+              tbr: null,
+              has_video: true,
+              has_audio: true,
+            }] : [],
+            is_playlist: false,
+            playlist_count: null,
+          };
+        }
+      } catch (scrapeErr: any) {
+        console.error('XHS direct scraping failed:', scrapeErr.message);
+      }
+
+      // Step 2: Third-party APIs as secondary fallback
+      try {
         const xhsData = await fetchXhsViaThirdParty(noteId, url);
         if (xhsData) {
           return {
-            id: noteId,
+            id: noteId || '',
             title: xhsData.title,
             description: '',
             thumbnail: xhsData.cover,
@@ -413,8 +525,8 @@ async function getVideoInfo(url: string): Promise<VideoInfo> {
             playlist_count: null,
           };
         }
-      } catch (xhsErr: any) {
-        console.error('Xiaohongshu third-party fallback failed:', xhsErr.message);
+      } catch (apiErr: any) {
+        console.error('XHS third-party API fallback failed:', apiErr.message);
       }
     }
 
@@ -571,20 +683,79 @@ app.get('/api/download', async (req, res) => {
       }
     }
 
-    // Xiaohongshu download fallback: use third-party APIs and proxy the stream
+    // Xiaohongshu download fallback: direct scraping + third-party APIs
     if (ytdlpFailed && detectPlatform(url) === 'xiaohongshu') {
-      try {
-        console.log('🔄 yt-dlp failed, trying third-party XHS APIs for download...');
-        const noteId = extractXhsNoteId(url);
+      const { default: axios } = await import('axios');
+      const noteId = extractXhsNoteId(url);
+      let videoUrl = '';
+      let xhsTitle = '';
 
-        const xhsData = await fetchXhsViaThirdParty(noteId, url);
-        if (xhsData?.videoUrl) {
-          console.log('✅ Proxying XHS video via third-party CDN URL');
-          const { default: axios } = await import('axios');
-          let xhsFilename = (xhsData.title || titleHint || 'xiaohongshu_video') + '.mp4';
+      // Step 1: Direct page scraping
+      try {
+        console.log('🔄 yt-dlp failed for XHS download, trying direct scraping...');
+        const xhsRes = await axios.get(url, {
+          timeout: 20000,
+          maxRedirects: 10,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://www.xiaohongshu.com',
+          },
+        });
+
+        const html = xhsRes.data;
+        const stateMatch = html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?})<\/script>/s)
+          || html.match(/window\.__INITIAL_STATE__\s*=\s*({.+?})\s*;?\s*<\/script>/s);
+
+        if (stateMatch) {
+          const jsonStr = stateMatch[1].replace(/undefined/g, 'null');
+          const state = JSON.parse(jsonStr);
+          const noteData = state?.note?.noteDetailMap;
+          const firstNote = noteData ? Object.values(noteData)[0] as any : null;
+          const note = firstNote?.note;
+          if (note) {
+            xhsTitle = note.title || note.desc || '小紅書影片';
+            const videoInfo = note.video;
+            if (videoInfo?.consumer?.originVideoKey) {
+              videoUrl = `https://sns-video-bd.xhscdn.com/${videoInfo.consumer.originVideoKey}`;
+            } else if (videoInfo?.media?.stream?.h264?.[0]?.masterUrl) {
+              videoUrl = videoInfo.media.stream.h264[0].masterUrl;
+            }
+          }
+        }
+
+        if (!videoUrl) {
+          const ogVideoMatch = html.match(/<meta[^>]*property="og:video(?::url)?"[^>]*content="([^"]+)"/);
+          const ogTitleMatch = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]+)"/);
+          if (ogVideoMatch) videoUrl = ogVideoMatch[1];
+          if (ogTitleMatch) xhsTitle = xhsTitle || ogTitleMatch[1];
+        }
+      } catch (scrapeErr: any) {
+        console.error('XHS direct scraping for download failed:', scrapeErr.message);
+      }
+
+      // Step 2: Third-party APIs if scraping didn't find video
+      if (!videoUrl) {
+        try {
+          const xhsData = await fetchXhsViaThirdParty(noteId, url);
+          if (xhsData?.videoUrl) {
+            videoUrl = xhsData.videoUrl;
+            xhsTitle = xhsTitle || xhsData.title;
+          }
+        } catch (e: any) {
+          console.error('XHS third-party download fallback failed:', e.message);
+        }
+      }
+
+      // Proxy the video stream
+      if (videoUrl) {
+        try {
+          console.log('✅ Proxying XHS video to client');
+          let xhsFilename = (xhsTitle || titleHint || 'xiaohongshu_video') + '.mp4';
           xhsFilename = xhsFilename.replace(/[/\\?%*:"|<>]/g, '_');
 
-          const response = await axios.get(xhsData.videoUrl, {
+          const response = await axios.get(videoUrl, {
             responseType: 'stream',
             timeout: 60000,
             headers: {
@@ -598,9 +769,9 @@ app.get('/api/download', async (req, res) => {
             res.setHeader('Content-Length', response.headers['content-length']);
           }
           return response.data.pipe(res);
+        } catch (proxyErr: any) {
+          console.error('XHS video proxy failed:', proxyErr.message);
         }
-      } catch (e: any) {
-        console.error('Xiaohongshu third-party download failed:', e.message);
       }
     }
 
